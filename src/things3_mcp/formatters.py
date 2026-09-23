@@ -42,14 +42,26 @@ def format_todo(todo: dict) -> str:
     if todo.get("notes"):
         todo_text += f"\nNotes: {todo['notes']}"
 
-    # Add project info if present
-    if todo.get("project"):
+    # Add project info if present. Todos under a heading have no project of
+    # their own in things.py, so take it from the heading instead.
+    project_uuid = todo.get("project")
+    if not project_uuid and todo.get("heading"):
         try:
-            project = things.get(todo["project"])
+            heading = things.get(todo["heading"])
+            project_uuid = heading.get("project") if heading else None
+        except Exception:  # nosec B110 - Ignore missing heading info
+            pass
+    if project_uuid:
+        try:
+            project = things.get(project_uuid)
             if project:
                 todo_text += f"\nProject: {project['title']}"
         except Exception:  # nosec B110 - Ignore missing project info, not all todos have projects
             pass
+
+    # Add heading if present
+    if todo.get("heading_title"):
+        todo_text += f"\nHeading: {todo['heading_title']}"
 
     # Add area info if present
     if todo.get("area"):

@@ -5,7 +5,8 @@ from unittest.mock import patch
 import pytest
 
 from things3_mcp import fast_server
-from things3_mcp.url_scheme import ChecklistUpdate
+from things3_mcp.headings import HeadingError
+from things3_mcp.url_scheme import ChecklistUpdate, HeadingChange
 
 
 @pytest.fixture()
@@ -24,13 +25,13 @@ def test_add_with_time_splits_date_and_reminder(mocks):
     assert result.startswith("✅")
     assert mocks["add_todo"].call_args.kwargs["when"] == "2026-10-01"
     assert mocks["add_todo"].call_args.kwargs["title"] == "Call + follow up"
-    mocks["apply_url_update"].assert_called_once_with("TODO1", when="2026-10-01@14:30", checklist=None)
+    mocks["apply_url_update"].assert_called_once_with("TODO1", when="2026-10-01@14:30", checklist=None, heading=None)
 
 
 def test_add_evening(mocks):
     fast_server.add_task(title="Read", when="evening")
     assert mocks["add_todo"].call_args.kwargs["when"] == "today"
-    mocks["apply_url_update"].assert_called_once_with("TODO1", when="evening", checklist=None)
+    mocks["apply_url_update"].assert_called_once_with("TODO1", when="evening", checklist=None, heading=None)
 
 
 @pytest.mark.parametrize("when", [None, "today", "someday", "2026-10-01"])
@@ -67,7 +68,7 @@ def test_update_with_time(mocks):
     result = fast_server.update_task(id="TODO1", when="evening@9pm")
     assert result.startswith("✅")
     assert mocks["update_todo"].call_args.kwargs["when"] == "today"
-    mocks["apply_url_update"].assert_called_once_with("TODO1", when="evening@21:00", checklist=None)
+    mocks["apply_url_update"].assert_called_once_with("TODO1", when="evening@21:00", checklist=None, heading=None)
 
 
 def test_update_plain_date_skips_url_step(mocks):
@@ -101,12 +102,12 @@ def test_add_with_checklist_only(mocks):
     result = fast_server.add_task(title="Groceries", checklist_items=["Eggs", "", "Milk + honey"])
     assert result.startswith("✅")
     assert mocks["add_todo"].call_args.kwargs["when"] is None
-    mocks["apply_url_update"].assert_called_once_with("TODO1", when=None, checklist=ChecklistUpdate(("Eggs", "Milk + honey"), "replace"))
+    mocks["apply_url_update"].assert_called_once_with("TODO1", when=None, checklist=ChecklistUpdate(("Eggs", "Milk + honey"), "replace"), heading=None)
 
 
 def test_add_with_checklist_and_when_makes_one_call(mocks):
     fast_server.add_task(title="Groceries", when="evening@6pm", checklist_items=["Eggs"])
-    mocks["apply_url_update"].assert_called_once_with("TODO1", when="evening@18:00", checklist=ChecklistUpdate(("Eggs",), "replace"))
+    mocks["apply_url_update"].assert_called_once_with("TODO1", when="evening@18:00", checklist=ChecklistUpdate(("Eggs",), "replace"), heading=None)
 
 
 def test_add_accepts_stringified_checklist_array(mocks):
@@ -139,7 +140,7 @@ def test_add_reports_checklist_partial_failure(mocks):
 def test_update_checklist_modes(mocks, mode):
     result = fast_server.update_task(id="TODO1", checklist_items=["More"], checklist_mode=mode)
     assert result.startswith("✅")
-    mocks["apply_url_update"].assert_called_once_with("TODO1", when=None, checklist=ChecklistUpdate(("More",), mode))
+    mocks["apply_url_update"].assert_called_once_with("TODO1", when=None, checklist=ChecklistUpdate(("More",), mode), heading=None)
 
 
 def test_update_bad_checklist_mode_never_updates(mocks):
@@ -158,4 +159,73 @@ def test_update_failed_applescript_skips_url_step(mocks):
 def test_update_reports_checklist_partial_failure(mocks):
     mocks["apply_url_update"].return_value = "Could not open Things URL: boom"
     result = fast_server.update_task(id="TODO1", when="evening", checklist_items=["x"], checklist_mode="append")
-    assert "Updated todo with ID: TODO1, but could not when='evening' and append 1 checklist item(s)" in result
+    assert "Updated todo with ID: TODO1, but could not set when='evening' and append 1 checklist item(s)" in result
+
+
+def test_add_with_heading_when_and_checklist_makes_one_call(mocks):
+    with (
+        patch.object(fast_server, "resolve_add_project", return_value="PROJ") as resolve_project,
+        patch.object(fast_server, "resolve_heading", return_value=HeadingChange("Body", "H-BODY")) as resolve_heading,
+    ):
+        result = fast_server.add_task(title="Scrub", list_title="Hygiene", heading="body", when="today@18:00", checklist_items=["Soap"])
+    assert result.startswith("✅")
+    assert "heading: Body" in result
+    resolve_project.assert_called_once_with(None, "Hygiene")
+    resolve_heading.assert_called_once_with("body", "PROJ")
+    mocks["apply_url_update"].assert_called_once_with("TODO1", when="today@18:00", checklist=ChecklistUpdate(("Soap",), "replace"), heading=HeadingChange("Body", "H-BODY"))
+
+
+def test_add_bad_heading_never_creates(mocks):
+    with (
+        patch.object(fast_server, "resolve_add_project", return_value="PROJ"),
+        patch.object(fast_server, "resolve_heading", side_effect=HeadingError("No heading 'Nope'. Available headings: Face, Body.")),
+    ):
+        result = fast_server.add_task(title="Scrub", list_title="Hygiene", heading="Nope")
+    assert result == "⚠️ Error: No heading 'Nope'. Available headings: Face, Body."
+    mocks["add_todo"].assert_not_called()
+    mocks["apply_url_update"].assert_not_called()
+
+
+def test_add_blank_heading_is_ignored(mocks):
+    with patch.object(fast_server, "resolve_heading") as resolve_heading:
+        fast_server.add_task(title="Scrub", heading="  ")
+    resolve_heading.assert_not_called()
+    mocks["apply_url_update"].assert_not_called()
+
+
+def test_add_reports_heading_partial_failure(mocks):
+    mocks["apply_url_update"].return_value = "THINGS_AUTH_TOKEN is not set."
+    with (
+        patch.object(fast_server, "resolve_add_project", return_value="PROJ"),
+        patch.object(fast_server, "resolve_heading", return_value=HeadingChange("Body", "H-BODY")),
+    ):
+        result = fast_server.add_task(title="Scrub", list_id="PROJ", heading="Body")
+    assert "Created todo: Scrub (ID: TODO1), but could not move it under heading 'Body'" in result
+
+
+def test_update_with_heading_resolves_against_target_project(mocks):
+    with (
+        patch.object(fast_server, "resolve_update_project", return_value="PROJ") as resolve_project,
+        patch.object(fast_server, "resolve_heading", return_value=HeadingChange("Face", "H-FACE")),
+    ):
+        result = fast_server.update_task(id="TODO1", heading="Face", list_name="Hygiene")
+    assert result.startswith("✅")
+    resolve_project.assert_called_once_with("TODO1", None, "Hygiene")
+    mocks["apply_url_update"].assert_called_once_with("TODO1", when=None, checklist=None, heading=HeadingChange("Face", "H-FACE"))
+
+
+def test_update_empty_heading_moves_out_without_project_lookup(mocks):
+    with patch.object(fast_server, "resolve_update_project") as resolve_project:
+        fast_server.update_task(id="TODO1", heading="")
+    resolve_project.assert_not_called()
+    mocks["apply_url_update"].assert_called_once_with("TODO1", when=None, checklist=None, heading=HeadingChange(None, None))
+
+
+def test_update_bad_heading_never_updates(mocks):
+    with (
+        patch.object(fast_server, "resolve_update_project", return_value=None),
+        patch.object(fast_server, "resolve_heading", side_effect=HeadingError("needs a project")),
+    ):
+        result = fast_server.update_task(id="TODO1", title="Changed", heading="Body")
+    assert result.startswith("⚠️ Error:")
+    mocks["update_todo"].assert_not_called()

@@ -15,6 +15,7 @@ from .applescript_bridge import (
     update_todo,
 )
 from .formatters import format_area, format_project, format_tag, format_todo
+from .headings import HeadingError, list_headings, project_of, resolve_add_project, resolve_heading, resolve_update_project
 from .logging_config import (
     get_logger,
     log_operation_end,
@@ -368,8 +369,36 @@ def get_todos(project_uuid: str | None = None) -> str:
     if not todos:
         return "No todos found"
 
+    if project_uuid:
+        # Match the app: todos without a heading first, then each heading's todos in heading order.
+        # sorted() is stable, so todos keep their own order within each group.
+        heading_order = {h["uuid"]: i for i, h in enumerate(list_headings(project_uuid))}
+        todos = sorted(todos, key=lambda t: -1 if not t.get("heading") else heading_order.get(t["heading"], len(heading_order)))
+
     formatted_todos = [format_todo(todo) for todo in todos]
     return "\n\n---\n\n".join(formatted_todos)
+
+
+@mcp.tool(name="get_headings")
+def get_headings(project_uuid: str) -> str:
+    """Get the headings in a project, in the order they appear in Things.
+
+    Headings are the groups inside a project. Use a heading's title with the
+    heading parameter of add_todo or update_todo.
+
+    Args:
+    ----
+        project_uuid: UUID of the project.
+    """
+    project = things.get(project_uuid)
+    if not project or project.get("type") != "project":
+        return f"Error: Invalid project UUID '{project_uuid}'"
+
+    headings = list_headings(project_uuid)
+    if not headings:
+        return f"No headings in project '{project['title']}'"
+
+    return "\n\n---\n\n".join(f"Title: {h['title']}\nUUID: {h['uuid']}" for h in headings)
 
 
 @mcp.tool(name="get_random_todos")
@@ -559,6 +588,7 @@ def add_task(
     list_id: str | None = None,
     list_title: str | None = None,
     checklist_items: list[str] | str | None = None,
+    heading: str | None = None,
 ) -> str:
     """Create a new todo in Things.
 
@@ -583,6 +613,9 @@ def add_task(
         checklist_items: Native Things checklist items, as an array of strings (e.g., ["Eggs", "Milk"]).
             One item per entry; items can't contain newlines, blank items are dropped, max 100.
             Requires the THINGS_AUTH_TOKEN env var.
+        heading: Title of an existing heading in the target project to put the todo under
+            (case-insensitive; look them up with get_headings). Needs list_id or list_title of a project.
+            Headings can't be created from here, only in the Things app. Requires the THINGS_AUTH_TOKEN env var.
     """
     try:
         # Debug: Log all input parameters
@@ -604,7 +637,10 @@ def add_task(
         try:
             parsed_when = parse_when(when)
             checklist = parse_checklist(params["checklist_items"])
-        except (WhenParseError, ChecklistError) as e:
+            heading_change = None
+            if heading is not None and heading.strip():
+                heading_change = resolve_heading(heading, resolve_add_project(list_id, list_title))
+        except (WhenParseError, ChecklistError, HeadingError) as e:
             return f"⚠️ Error: {e}"
 
         # Use the direct AppleScript approach which is more reliable
@@ -625,11 +661,11 @@ def add_task(
             logger.error("AppleScript returned error instead of task ID: %s", task_id)
             return f"⚠️ AppleScript error: {task_id}"
 
-        # AppleScript can't set This Evening, reminder times or checklist items; apply those via the URL scheme
-        if parsed_when.needs_url_scheme or checklist:
-            url_error = apply_url_update(task_id, when=parsed_when.url_when, checklist=checklist)
+        # AppleScript can't set This Evening, reminder times, checklist items or headings; apply those via the URL scheme
+        if parsed_when.needs_url_scheme or checklist or heading_change:
+            url_error = apply_url_update(task_id, when=parsed_when.url_when, checklist=checklist, heading=heading_change)
             if url_error:
-                return f"⚠️ Created todo: {title} (ID: {task_id}), but could not {describe_url_update(parsed_when.url_when, checklist)}: {url_error}"
+                return f"⚠️ Created todo: {title} (ID: {task_id}), but could not {describe_url_update(parsed_when.url_when, checklist, heading_change)}: {url_error}"
 
         # Get location information for the success message
         try:
@@ -637,8 +673,9 @@ def add_task(
 
             todo = things.get(task_id)
             if todo:
-                if todo.get("project"):
-                    location = f"Project: {things.get(todo['project'])['title']}"
+                project_uuid = project_of(todo)
+                if project_uuid:
+                    location = f"Project: {things.get(project_uuid)['title']}"
                 elif todo.get("area"):
                     location = f"Area: {things.get(todo['area'])['title']}"
                 else:
@@ -647,6 +684,10 @@ def add_task(
                 location = "Unknown"
         except Exception:
             location = "Unknown"
+
+        if heading_change:
+            # The URL step runs asynchronously in Things, so report the heading that was requested
+            location += f", heading: {heading_change.title}"
 
         return f"✅ Successfully created todo: {title} (ID: {task_id}) in {location}"
 
@@ -742,6 +783,7 @@ def update_task(
     list_name: str | None = None,
     checklist_items: list[str] | str | None = None,
     checklist_mode: str = "replace",
+    heading: str | None = None,
 ) -> str:
     """Update an existing todo in Things.
 
@@ -769,6 +811,9 @@ def update_task(
             An empty array leaves the checklist unchanged. Requires the THINGS_AUTH_TOKEN env var.
         checklist_mode: How checklist_items combine with the existing checklist: "replace" (default)
             replaces it, "append" adds to the end, "prepend" adds to the start.
+        heading: Title of an existing heading to move the todo under (case-insensitive; look them up with
+            get_headings). Checked against the project given by list_id/list_name, or the todo's current
+            project. Pass "" to move the todo out of its heading. Requires the THINGS_AUTH_TOKEN env var.
     """
     try:
         # Preprocess parameters to handle MCP array serialization issues
@@ -779,7 +824,11 @@ def update_task(
         try:
             parsed_when = parse_when(when)
             checklist = parse_checklist(params["checklist_items"], checklist_mode)
-        except (WhenParseError, ChecklistError) as e:
+            heading_change = None
+            if heading is not None:
+                project_uuid = resolve_update_project(id, list_id, list_name) if heading.strip() else None
+                heading_change = resolve_heading(heading, project_uuid)
+        except (WhenParseError, ChecklistError, HeadingError) as e:
             return f"⚠️ Error: {e}"
 
         logger.info(f"Updating todo using AppleScript: {id}")
@@ -804,11 +853,11 @@ def update_task(
             if "true" in str(success).lower():
                 logger.debug("Success case matched: 'true' in result")
 
-                # AppleScript can't set This Evening, reminder times or checklist items; apply those via the URL scheme
-                if parsed_when.needs_url_scheme or checklist:
-                    url_error = apply_url_update(id, when=parsed_when.url_when, checklist=checklist)
+                # AppleScript can't set This Evening, reminder times, checklist items or headings; apply those via the URL scheme
+                if parsed_when.needs_url_scheme or checklist or heading_change:
+                    url_error = apply_url_update(id, when=parsed_when.url_when, checklist=checklist, heading=heading_change)
                     if url_error:
-                        return f"⚠️ Updated todo with ID: {id}, but could not {describe_url_update(parsed_when.url_when, checklist)}: {url_error}"
+                        return f"⚠️ Updated todo with ID: {id}, but could not {describe_url_update(parsed_when.url_when, checklist, heading_change)}: {url_error}"
 
                 return f"✅ Successfully updated todo with ID: {id}"
             elif success.startswith("Error:"):

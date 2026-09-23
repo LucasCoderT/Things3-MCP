@@ -6,7 +6,8 @@ scheme can do both via ``things:///update?id=...&when=...``, which needs the
 auth token from Things → Settings → General → Enable Things URLs → Manage.
 
 It also has no way to create checklist items, which the URL scheme supports
-via ``checklist-items``, ``append-checklist-items`` and ``prepend-checklist-items``.
+via ``checklist-items``, ``append-checklist-items`` and ``prepend-checklist-items``,
+or to put a to-do under a heading, which it supports via ``heading-id``.
 
 The approach is: parse ``when`` into the part AppleScript handles (the date)
 and the part only the URL scheme handles (evening and/or a time), create or
@@ -202,19 +203,39 @@ def parse_checklist(items: list[str] | str | None, mode: str = "replace") -> Che
     return ChecklistUpdate(tuple(kept), mode)
 
 
-def describe_url_update(when: str | None = None, checklist: ChecklistUpdate | None = None) -> str:
+@dataclass(frozen=True)
+class HeadingChange:
+    """A heading to move a to-do under, or None for both fields to move it out of its heading."""
+
+    title: str | None
+    uuid: str | None
+
+
+def describe_url_update(when: str | None = None, checklist: ChecklistUpdate | None = None, heading: HeadingChange | None = None) -> str:
     """Describe what a URL update sets, for log and error messages."""
     parts = []
     if when:
-        parts.append(f"when={when!r}")
+        parts.append(f"set when={when!r}")
     if checklist:
         verb = {"replace": "set", "append": "append", "prepend": "prepend"}[checklist.mode]
         parts.append(f"{verb} {len(checklist.items)} checklist item(s)")
+    if heading:
+        parts.append(f"move it under heading {heading.title!r}" if heading.uuid else "move it out of its heading")
     return " and ".join(parts)
 
 
-def build_update_url(todo_id: str, token: str, when: str | None = None, checklist: ChecklistUpdate | None = None) -> str:
-    """Build one ``things:///update`` URL carrying any of ``when`` and checklist items.
+def build_update_url(
+    todo_id: str,
+    token: str,
+    when: str | None = None,
+    checklist: ChecklistUpdate | None = None,
+    heading: HeadingChange | None = None,
+) -> str:
+    """Build one ``things:///update`` URL carrying any of ``when``, checklist items and heading.
+
+    A heading is set by ``heading-id`` since it's already been resolved to one
+    heading. Moving out of a heading uses an empty ``heading``, which was
+    checked against Things directly.
 
     Uses percent-encoding throughout so spaces become %20 and newlines %0A,
     never +, which Things would otherwise read literally.
@@ -224,13 +245,18 @@ def build_update_url(todo_id: str, token: str, when: str | None = None, checklis
         params["when"] = when
     if checklist:
         params[checklist.param] = "\n".join(checklist.items)
+    if heading:
+        if heading.uuid:
+            params["heading-id"] = heading.uuid
+        else:
+            params["heading"] = ""
     params["auth-token"] = token
     query = urlencode(params, quote_via=quote)
     return f"things:///update?{query}"
 
 
-def apply_url_update(todo_id: str, when: str | None = None, checklist: ChecklistUpdate | None = None) -> str | None:
-    """Apply URL-scheme-only changes (``when`` and/or checklist items) to an existing todo.
+def apply_url_update(todo_id: str, when: str | None = None, checklist: ChecklistUpdate | None = None, heading: HeadingChange | None = None) -> str | None:
+    """Apply URL-scheme-only changes (``when``, checklist items, heading) to an existing todo.
 
     Everything goes in a single URL, opened with ``open -g`` so Things stays
     in the background.
@@ -243,8 +269,8 @@ def apply_url_update(todo_id: str, when: str | None = None, checklist: Checklist
     if not token:
         return f"{AUTH_TOKEN_ENV} is not set. Copy the token from Things → Settings → General → Enable Things URLs → Manage and add it to the MCP server's env."
 
-    url = build_update_url(todo_id, token, when=when, checklist=checklist)
-    logger.info(f"Applying {describe_url_update(when, checklist)} to {todo_id} via Things URL scheme")
+    url = build_update_url(todo_id, token, when=when, checklist=checklist, heading=heading)
+    logger.info(f"Applying {describe_url_update(when, checklist, heading)} to {todo_id} via Things URL scheme")
 
     try:
         result = subprocess.run(["open", "-g", url], capture_output=True, text=True, timeout=10, check=False)  # nosec B603 B607

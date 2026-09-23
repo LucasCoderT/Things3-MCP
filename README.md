@@ -129,6 +129,7 @@ Restart the Claude Desktop app to enable the integration.
 
 #### Basic Operations
 - `get_todos` - Get todos, optionally filtered by project
+- `get_headings` - Get the headings in a project
 - `get_projects` - Get all projects
 - `get_areas` - Get all areas
 
@@ -154,7 +155,10 @@ Restart the Claude Desktop app to enable the integration.
 ## Tool Parameters
 
 ### get_todos
-- `project_uuid` (optional) - Filter todos by project
+- `project_uuid` (optional) - Filter todos by project. With a project, todos come back in the same order as the app: the ones without a heading first, then each heading's todos in heading order. Each todo under a heading has a `Heading:` line
+
+### get_headings
+- `project_uuid` - Project to list headings for. Returns each heading's title and UUID in display order
 
 ### get_projects / get_areas / get_tags
 - `include_items` (optional, default: false) - Include contained items
@@ -185,6 +189,7 @@ Restart the Claude Desktop app to enable the integration.
 - `list_title` (optional) - Title of project/area to add to (must exactly match existing name)
 - `list_id` (optional) - ID of project/area to add to (takes priority over list_title if both provided)
 - `checklist_items` (optional) - Native Things checklist items, one per array entry (max 100, no newlines inside an item). Needs `THINGS_AUTH_TOKEN`
+- `heading` (optional) - Title of an existing heading in the target project (case-insensitive). Needs `list_id` or `list_title` pointing at a project, and `THINGS_AUTH_TOKEN`. See [Headings](#headings)
 - **Note**: Native checklist items can't be created through AppleScript, so `checklist_items` goes through the Things URL scheme and needs the auth token (see [Reminders and This Evening](#reminders-and-this-evening)). Without the token, you can still use Markdown checkboxes in the notes field for something similar. ![Things3 - Subtasks - Markdown Checklist](docs/images/Things3-subtasks-markdown-checklist.png)
 
 ### update_todo
@@ -200,6 +205,7 @@ Restart the Claude Desktop app to enable the integration.
 - `list_id` (optional) - ID of project/area to move the todo to (takes priority over list_name if both provided)
 - `checklist_items` (optional) - Native Things checklist items, one per array entry (max 100, no newlines inside an item). Needs `THINGS_AUTH_TOKEN`
 - `checklist_mode` (optional) - `replace` (default), `append` or `prepend`, for how `checklist_items` combine with the existing checklist
+- `heading` (optional) - Title of an existing heading to move the todo under (case-insensitive), checked against the new project if the todo is being moved, otherwise its current one. `""` moves it out of its heading. Needs `THINGS_AUTH_TOKEN`
 
 ### add_project
 - `title` - Title of the project
@@ -332,6 +338,16 @@ Times can be 24-hour (`18:00`) or 12-hour with am/pm (`6pm`, `6:30 PM`). `anytim
 If the token is missing, the todo still gets created with its date, and the tool tells you the reminder part didn't go through.
 
 Repeating todos have to be set up in the Things app itself. Neither AppleScript nor the URL scheme can create them.
+
+## Headings
+
+Headings are the groups inside a project. `get_headings` lists them, and `add_todo` and `update_todo` take a `heading` to put a todo under one. Like reminders, this goes through the URL scheme and needs the same token.
+
+The heading is checked before anything is written. If it isn't in the project, or more than one heading matches, or the todo isn't going into a project at all, you get an error listing the project's headings and nothing is created or changed.
+
+Headings themselves have to be created in the Things app, with Cmd-Shift-N inside a project.
+
+I tried adding one to an existing project through `things:///json` with an `update` operation, but Things ignored it.
 
 ## Development
 

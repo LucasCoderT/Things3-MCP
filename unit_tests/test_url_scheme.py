@@ -8,6 +8,7 @@ import pytest
 from things3_mcp.url_scheme import (
     ChecklistError,
     ChecklistUpdate,
+    HeadingChange,
     ParsedWhen,
     WhenParseError,
     apply_url_update,
@@ -179,9 +180,9 @@ def test_parse_checklist_rejects(items, mode, message):
 
 
 def test_describe_url_update():
-    assert describe_url_update("evening", None) == "when='evening'"
+    assert describe_url_update("evening", None) == "set when='evening'"
     assert describe_url_update(None, ChecklistUpdate(("a",), "append")) == "append 1 checklist item(s)"
-    assert describe_url_update("today@18:00", ChecklistUpdate(("a", "b"))) == "when='today@18:00' and set 2 checklist item(s)"
+    assert describe_url_update("today@18:00", ChecklistUpdate(("a", "b"))) == "set when='today@18:00' and set 2 checklist item(s)"
 
 
 def test_apply_url_update_sends_one_url_with_everything(monkeypatch):
@@ -191,3 +192,18 @@ def test_apply_url_update_sends_one_url_with_everything(monkeypatch):
         assert apply_url_update("ABC123", when="evening", checklist=ChecklistUpdate(("A", "B"), "prepend")) is None
     run.assert_called_once()
     assert run.call_args.args[0] == ["open", "-g", "things:///update?id=ABC123&when=evening&prepend-checklist-items=A%0AB&auth-token=secret"]
+
+
+def test_build_update_url_with_heading_when_and_checklist():
+    url = build_update_url("ABC123", "secret", when="today@18:00", checklist=ChecklistUpdate(("Soap", "Scrub")), heading=HeadingChange("Body", "H-BODY"))
+    assert url == "things:///update?id=ABC123&when=today%4018%3A00&checklist-items=Soap%0AScrub&heading-id=H-BODY&auth-token=secret"
+
+
+def test_build_update_url_clears_heading_with_empty_heading():
+    url = build_update_url("ABC123", "secret", heading=HeadingChange(None, None))
+    assert url == "things:///update?id=ABC123&heading=&auth-token=secret"
+
+
+def test_describe_url_update_heading():
+    assert describe_url_update(heading=HeadingChange("Body", "H")) == "move it under heading 'Body'"
+    assert describe_url_update(heading=HeadingChange(None, None)) == "move it out of its heading"
