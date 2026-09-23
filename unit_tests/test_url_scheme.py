@@ -6,11 +6,15 @@ from unittest.mock import patch
 import pytest
 
 from things3_mcp.url_scheme import (
+    ChecklistError,
+    ChecklistUpdate,
     ParsedWhen,
     WhenParseError,
-    apply_url_when,
+    apply_url_update,
     build_update_url,
+    describe_url_update,
     normalize_time,
+    parse_checklist,
     parse_when,
 )
 
@@ -85,33 +89,105 @@ def test_parse_when_rejects(when, message):
 
 
 def test_build_update_url_uses_percent_encoding():
-    url = build_update_url("ABC123", "evening@18:00", "tok en+/=")
+    url = build_update_url("ABC123", "tok en+/=", when="evening@18:00")
     assert url == "things:///update?id=ABC123&when=evening%4018%3A00&auth-token=tok%20en%2B%2F%3D"
     assert "+" not in url
 
 
-def test_apply_url_when_missing_token(monkeypatch):
+def test_apply_url_update_missing_token(monkeypatch):
     monkeypatch.delenv("THINGS_AUTH_TOKEN", raising=False)
     with patch("things3_mcp.url_scheme.subprocess.run") as run:
-        error = apply_url_when("ABC123", "evening")
+        error = apply_url_update("ABC123", when="evening")
     assert error is not None
     assert "THINGS_AUTH_TOKEN" in error
     run.assert_not_called()
 
 
-def test_apply_url_when_opens_in_background(monkeypatch):
+def test_apply_url_update_opens_in_background(monkeypatch):
     monkeypatch.setenv("THINGS_AUTH_TOKEN", "secret")
     completed = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
     with patch("things3_mcp.url_scheme.subprocess.run", return_value=completed) as run:
-        assert apply_url_when("ABC123", "today@18:00") is None
+        assert apply_url_update("ABC123", when="today@18:00") is None
     args = run.call_args.args[0]
     assert args == ["open", "-g", "things:///update?id=ABC123&when=today%4018%3A00&auth-token=secret"]
 
 
-def test_apply_url_when_reports_open_failure(monkeypatch):
+def test_apply_url_update_reports_open_failure(monkeypatch):
     monkeypatch.setenv("THINGS_AUTH_TOKEN", "secret")
     completed = subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="LSOpenURLsWithRole() failed")
     with patch("things3_mcp.url_scheme.subprocess.run", return_value=completed):
-        error = apply_url_when("ABC123", "evening")
+        error = apply_url_update("ABC123", when="evening")
     assert error is not None
     assert "LSOpenURLsWithRole" in error
+
+
+def test_build_update_url_with_when_and_checklist():
+    checklist = ChecklistUpdate(("Eggs", "Milk + honey"))
+    url = build_update_url("ABC123", "secret", when="today@18:00", checklist=checklist)
+    assert url == "things:///update?id=ABC123&when=today%4018%3A00&checklist-items=Eggs%0AMilk%20%2B%20honey&auth-token=secret"
+
+
+def test_build_update_url_checklist_only():
+    url = build_update_url("ABC123", "secret", checklist=ChecklistUpdate(("A", "B")))
+    assert "when=" not in url
+    assert "checklist-items=A%0AB" in url
+
+
+@pytest.mark.parametrize(
+    ("mode", "param"),
+    [("replace", "checklist-items"), ("append", "append-checklist-items"), ("prepend", "prepend-checklist-items")],
+)
+def test_build_update_url_checklist_modes(mode, param):
+    url = build_update_url("ABC123", "secret", checklist=parse_checklist(["X"], mode))
+    assert f"&{param}=X&" in url
+    assert url.count("checklist-items") == 1
+
+
+def test_parse_checklist_drops_blanks_and_keeps_text_exact():
+    parsed = parse_checklist(["  Eggs ", "", "   ", 'a+b %20 \\ "q"'])
+    assert parsed == ChecklistUpdate(("  Eggs ", 'a+b %20 \\ "q"'), "replace")
+
+
+@pytest.mark.parametrize("items", [None, [], ["", "  "]])
+def test_parse_checklist_nothing_to_do(items):
+    assert parse_checklist(items) is None
+
+
+def test_parse_checklist_single_string_is_one_item():
+    assert parse_checklist("Only one").items == ("Only one",)
+
+
+def test_parse_checklist_allows_100_items():
+    assert len(parse_checklist([f"item {i}" for i in range(100)]).items) == 100
+
+
+@pytest.mark.parametrize(
+    ("items", "mode", "message"),
+    [
+        (["a\nb"], "replace", "contains a newline"),
+        (["a\rb"], "replace", "contains a newline"),
+        ("line one\nline two", "replace", "contains a newline"),
+        ([f"item {i}" for i in range(101)], "replace", "at most 100"),
+        (["ok", 3], "replace", "must be strings"),
+        (["ok"], "overwrite", "Unknown checklist_mode"),
+        (None, "overwrite", "Unknown checklist_mode"),
+    ],
+)
+def test_parse_checklist_rejects(items, mode, message):
+    with pytest.raises(ChecklistError, match=message):
+        parse_checklist(items, mode)
+
+
+def test_describe_url_update():
+    assert describe_url_update("evening", None) == "when='evening'"
+    assert describe_url_update(None, ChecklistUpdate(("a",), "append")) == "append 1 checklist item(s)"
+    assert describe_url_update("today@18:00", ChecklistUpdate(("a", "b"))) == "when='today@18:00' and set 2 checklist item(s)"
+
+
+def test_apply_url_update_sends_one_url_with_everything(monkeypatch):
+    monkeypatch.setenv("THINGS_AUTH_TOKEN", "secret")
+    completed = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+    with patch("things3_mcp.url_scheme.subprocess.run", return_value=completed) as run:
+        assert apply_url_update("ABC123", when="evening", checklist=ChecklistUpdate(("A", "B"), "prepend")) is None
+    run.assert_called_once()
+    assert run.call_args.args[0] == ["open", "-g", "things:///update?id=ABC123&when=evening&prepend-checklist-items=A%0AB&auth-token=secret"]

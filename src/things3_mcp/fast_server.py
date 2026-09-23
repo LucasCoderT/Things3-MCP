@@ -21,7 +21,7 @@ from .logging_config import (
     log_operation_start,
     setup_logging,
 )
-from .url_scheme import WhenParseError, apply_url_when, parse_when
+from .url_scheme import ChecklistError, WhenParseError, apply_url_update, describe_url_update, parse_checklist, parse_when
 
 # Configure enhanced logging
 setup_logging(console_level="INFO", file_level="DEBUG", structured_logs=True)
@@ -558,6 +558,7 @@ def add_task(
     tags: list[str] | str | None = None,
     list_id: str | None = None,
     list_title: str | None = None,
+    checklist_items: list[str] | str | None = None,
 ) -> str:
     """Create a new todo in Things.
 
@@ -579,6 +580,9 @@ def add_task(
         list_id: ID of project/area to add to (takes priority over list_title if both provided)
         list_title: Title of project/area to add to (must exactly match an existing area or project title — look them up with get_areas or get_projects).
             If both list_id and list_title are provided, list_id takes priority.
+        checklist_items: Native Things checklist items, as an array of strings (e.g., ["Eggs", "Milk"]).
+            One item per entry; items can't contain newlines, blank items are dropped, max 100.
+            Requires the THINGS_AUTH_TOKEN env var.
     """
     try:
         # Debug: Log all input parameters
@@ -592,14 +596,15 @@ def add_task(
         logger.debug(f"  list_title: {list_title!r}")
 
         # Preprocess parameters to handle MCP array serialization issues
-        params = preprocess_array_params(tags=tags)
+        params = preprocess_array_params(tags=tags, checklist_items=checklist_items)
         tags = params["tags"]
         logger.debug(f"  processed tags: {tags!r} (type: {type(tags)})")
 
-        # Validate when before creating anything, so a bad value never leaves a stray todo
+        # Validate when and checklist before creating anything, so a bad value never leaves a stray todo
         try:
             parsed_when = parse_when(when)
-        except WhenParseError as e:
+            checklist = parse_checklist(params["checklist_items"])
+        except (WhenParseError, ChecklistError) as e:
             return f"⚠️ Error: {e}"
 
         # Use the direct AppleScript approach which is more reliable
@@ -620,11 +625,11 @@ def add_task(
             logger.error("AppleScript returned error instead of task ID: %s", task_id)
             return f"⚠️ AppleScript error: {task_id}"
 
-        # AppleScript can't set This Evening or reminder times; apply those via the URL scheme
-        if parsed_when.needs_url_scheme:
-            url_error = apply_url_when(task_id, parsed_when.url_when)
+        # AppleScript can't set This Evening, reminder times or checklist items; apply those via the URL scheme
+        if parsed_when.needs_url_scheme or checklist:
+            url_error = apply_url_update(task_id, when=parsed_when.url_when, checklist=checklist)
             if url_error:
-                return f"⚠️ Created todo: {title} (ID: {task_id}), but could not set when={parsed_when.url_when!r}: {url_error}"
+                return f"⚠️ Created todo: {title} (ID: {task_id}), but could not {describe_url_update(parsed_when.url_when, checklist)}: {url_error}"
 
         # Get location information for the success message
         try:
@@ -735,6 +740,8 @@ def update_task(
     canceled: bool | None = None,
     list_id: str | None = None,
     list_name: str | None = None,
+    checklist_items: list[str] | str | None = None,
+    checklist_mode: str = "replace",
 ) -> str:
     """Update an existing todo in Things.
 
@@ -757,16 +764,22 @@ def update_task(
         list_id: ID of project/area to move the todo to (takes priority over list_name if both provided).
         list_name: Name of built-in list, project, or area to move the todo to. For built-in lists use: "Inbox", "Today", "Anytime", "Someday". For projects or areas, use the exact name.
             If both list_id and list_name are provided, list_id takes priority.
+        checklist_items: Native Things checklist items, as an array of strings (e.g., ["Eggs", "Milk"]).
+            One item per entry; items can't contain newlines, blank items are dropped, max 100.
+            An empty array leaves the checklist unchanged. Requires the THINGS_AUTH_TOKEN env var.
+        checklist_mode: How checklist_items combine with the existing checklist: "replace" (default)
+            replaces it, "append" adds to the end, "prepend" adds to the start.
     """
     try:
         # Preprocess parameters to handle MCP array serialization issues
-        params = preprocess_array_params(tags=tags)
+        params = preprocess_array_params(tags=tags, checklist_items=checklist_items)
         tags = params["tags"]
 
-        # Validate when before updating anything
+        # Validate when and checklist before updating anything
         try:
             parsed_when = parse_when(when)
-        except WhenParseError as e:
+            checklist = parse_checklist(params["checklist_items"], checklist_mode)
+        except (WhenParseError, ChecklistError) as e:
             return f"⚠️ Error: {e}"
 
         logger.info(f"Updating todo using AppleScript: {id}")
@@ -791,11 +804,11 @@ def update_task(
             if "true" in str(success).lower():
                 logger.debug("Success case matched: 'true' in result")
 
-                # AppleScript can't set This Evening or reminder times; apply those via the URL scheme
-                if parsed_when.needs_url_scheme:
-                    url_error = apply_url_when(id, parsed_when.url_when)
+                # AppleScript can't set This Evening, reminder times or checklist items; apply those via the URL scheme
+                if parsed_when.needs_url_scheme or checklist:
+                    url_error = apply_url_update(id, when=parsed_when.url_when, checklist=checklist)
                     if url_error:
-                        return f"⚠️ Updated todo with ID: {id}, but could not set when={parsed_when.url_when!r}: {url_error}"
+                        return f"⚠️ Updated todo with ID: {id}, but could not {describe_url_update(parsed_when.url_when, checklist)}: {url_error}"
 
                 return f"✅ Successfully updated todo with ID: {id}"
             elif success.startswith("Error:"):

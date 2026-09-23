@@ -5,9 +5,13 @@ way to put a todo in This Evening or to set a reminder time. The Things URL
 scheme can do both via ``things:///update?id=...&when=...``, which needs the
 auth token from Things → Settings → General → Enable Things URLs → Manage.
 
+It also has no way to create checklist items, which the URL scheme supports
+via ``checklist-items``, ``append-checklist-items`` and ``prepend-checklist-items``.
+
 The approach is: parse ``when`` into the part AppleScript handles (the date)
 and the part only the URL scheme handles (evening and/or a time), create or
-update the todo with AppleScript as before, then apply the URL part by ID.
+update the todo with AppleScript as before, then apply the URL-only parts by
+ID in a single ``things:///update`` call.
 """
 
 import os
@@ -138,20 +142,98 @@ def parse_when(when: str | None) -> ParsedWhen:
     raise WhenParseError(f"Unsupported date '{date_part}' in when value '{when}'. Use today, tomorrow, evening or YYYY-MM-DD before the @.")
 
 
-def build_update_url(todo_id: str, when: str, token: str) -> str:
-    """Build a ``things:///update`` URL that sets ``when`` on a todo.
+_CHECKLIST_PARAMS = {
+    "replace": "checklist-items",
+    "append": "append-checklist-items",
+    "prepend": "prepend-checklist-items",
+}
+MAX_CHECKLIST_ITEMS = 100
 
-    Uses percent-encoding throughout so spaces become %20, never +, which
-    Things would otherwise read literally.
+
+class ChecklistError(ValueError):
+    """Raised when checklist items or the checklist mode are invalid."""
+
+
+@dataclass(frozen=True)
+class ChecklistUpdate:
+    """Validated checklist items plus how they combine with existing ones."""
+
+    items: tuple[str, ...]
+    mode: str = "replace"
+
+    @property
+    def param(self) -> str:
+        """The URL scheme parameter name for this mode."""
+        return _CHECKLIST_PARAMS[self.mode]
+
+
+def parse_checklist(items: list[str] | str | None, mode: str = "replace") -> ChecklistUpdate | None:
+    """Validate checklist items for the URL scheme.
+
+    Blank items are dropped. Returns None if nothing is left, so an empty list
+    leaves the todo's checklist unchanged.
+
+    Raises:
+    ------
+        ChecklistError: If the mode is unknown, an item is not a string or contains
+            a newline, or there are more than 100 items.
     """
-    query = urlencode({"id": todo_id, "when": when, "auth-token": token}, quote_via=quote)
+    if mode not in _CHECKLIST_PARAMS:
+        raise ChecklistError(f"Unknown checklist_mode '{mode}'. Use replace, append or prepend.")
+    if items is None:
+        return None
+    if isinstance(items, str):
+        items = [items]
+
+    kept = []
+    for item in items:
+        if not isinstance(item, str):
+            raise ChecklistError(f"Checklist items must be strings, got {type(item).__name__}: {item!r}")
+        if not item.strip():
+            continue
+        if "\n" in item or "\r" in item:
+            raise ChecklistError(f"Checklist item {item!r} contains a newline. Pass each item as a separate array entry.")
+        kept.append(item)
+
+    if len(kept) > MAX_CHECKLIST_ITEMS:
+        raise ChecklistError(f"Too many checklist items ({len(kept)}). Things accepts at most {MAX_CHECKLIST_ITEMS}.")
+    if not kept:
+        return None
+    return ChecklistUpdate(tuple(kept), mode)
+
+
+def describe_url_update(when: str | None = None, checklist: ChecklistUpdate | None = None) -> str:
+    """Describe what a URL update sets, for log and error messages."""
+    parts = []
+    if when:
+        parts.append(f"when={when!r}")
+    if checklist:
+        verb = {"replace": "set", "append": "append", "prepend": "prepend"}[checklist.mode]
+        parts.append(f"{verb} {len(checklist.items)} checklist item(s)")
+    return " and ".join(parts)
+
+
+def build_update_url(todo_id: str, token: str, when: str | None = None, checklist: ChecklistUpdate | None = None) -> str:
+    """Build one ``things:///update`` URL carrying any of ``when`` and checklist items.
+
+    Uses percent-encoding throughout so spaces become %20 and newlines %0A,
+    never +, which Things would otherwise read literally.
+    """
+    params = {"id": todo_id}
+    if when:
+        params["when"] = when
+    if checklist:
+        params[checklist.param] = "\n".join(checklist.items)
+    params["auth-token"] = token
+    query = urlencode(params, quote_via=quote)
     return f"things:///update?{query}"
 
 
-def apply_url_when(todo_id: str, url_when: str) -> str | None:
-    """Apply a URL scheme ``when`` value to an existing todo.
+def apply_url_update(todo_id: str, when: str | None = None, checklist: ChecklistUpdate | None = None) -> str | None:
+    """Apply URL-scheme-only changes (``when`` and/or checklist items) to an existing todo.
 
-    Opens the URL with ``open -g`` so Things stays in the background.
+    Everything goes in a single URL, opened with ``open -g`` so Things stays
+    in the background.
 
     Returns:
     -------
@@ -161,8 +243,8 @@ def apply_url_when(todo_id: str, url_when: str) -> str | None:
     if not token:
         return f"{AUTH_TOKEN_ENV} is not set. Copy the token from Things → Settings → General → Enable Things URLs → Manage and add it to the MCP server's env."
 
-    url = build_update_url(todo_id, url_when, token)
-    logger.info(f"Applying when={url_when!r} to {todo_id} via Things URL scheme")
+    url = build_update_url(todo_id, token, when=when, checklist=checklist)
+    logger.info(f"Applying {describe_url_update(when, checklist)} to {todo_id} via Things URL scheme")
 
     try:
         result = subprocess.run(["open", "-g", url], capture_output=True, text=True, timeout=10, check=False)  # nosec B603 B607

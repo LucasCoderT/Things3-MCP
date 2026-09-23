@@ -184,7 +184,8 @@ Restart the Claude Desktop app to enable the integration.
 - `tags` (optional) - Tags to apply to the todo
 - `list_title` (optional) - Title of project/area to add to (must exactly match existing name)
 - `list_id` (optional) - ID of project/area to add to (takes priority over list_title if both provided)
-- **Note**: While Things’ native checklist feature (i.e., subtasks) cannot be created via AppleScript, you and your LLMs can use Markdown checkboxes in the notes field to achieve similar functionality. ![Things3 - Subtasks - Markdown Checklist](docs/images/Things3-subtasks-markdown-checklist.png)
+- `checklist_items` (optional) - Native Things checklist items, one per array entry (max 100, no newlines inside an item). Needs `THINGS_AUTH_TOKEN`
+- **Note**: Native checklist items can't be created through AppleScript, so `checklist_items` goes through the Things URL scheme and needs the auth token (see [Reminders and This Evening](#reminders-and-this-evening)). Without the token, you can still use Markdown checkboxes in the notes field for something similar. ![Things3 - Subtasks - Markdown Checklist](docs/images/Things3-subtasks-markdown-checklist.png)
 
 ### update_todo
 - `id` - ID of the todo to update
@@ -197,6 +198,8 @@ Restart the Claude Desktop app to enable the integration.
 - `canceled` (optional) - Mark as canceled
 - `list_name` (optional) - Name of built-in list, project, or area to move the todo to. For built-in lists use: "Inbox", "Today", "Anytime", "Someday". For projects/areas, use the exact name.
 - `list_id` (optional) - ID of project/area to move the todo to (takes priority over list_name if both provided)
+- `checklist_items` (optional) - Native Things checklist items, one per array entry (max 100, no newlines inside an item). Needs `THINGS_AUTH_TOKEN`
+- `checklist_mode` (optional) - `replace` (default), `append` or `prepend`, for how `checklist_items` combine with the existing checklist
 
 ### add_project
 - `title` - Title of the project
@@ -313,6 +316,8 @@ Put it in the `env` block for the server in `claude_desktop_config.json`:
     }
 }
 ```
+
+The same token is used for `checklist_items`, which puts real Things checklist items on a todo. The reminder and checklist parts go to Things together in one URL.
 
 Some `when` values that use it:
 
