@@ -23,7 +23,7 @@ classifiers = [
 ]
 dependencies = [
     "httpx>=0.28.1",
-    "mcp[cli]>=1.2.0",
+    "mcp[cli]>=1.2.0,<2",
     "things-py>=0.0.15",
 ]
 
@@ -140,6 +140,13 @@ ignore-decorators = ["pytest.fixture"]  # Don't require docstrings for pytest fi
     "PLR2004",  # Allow magic numbers in tests
     "PTH118",  # Allow os.path.join in tests
     "PTH120",  # Allow os.path.dirname in tests
+]
+"unit_tests/*" = [
+    "S101",  # Allow asserts in tests
+    "D103",  # Allow missing function docstrings in tests
+    "ANN001",  # Allow missing argument type annotations in tests
+    "ANN201",  # Allow missing return type annotations in tests
+    "ANN202",  # Allow missing return type annotations for private functions in tests
 ]
 "src/things3_mcp/applescript_bridge.py" = ["Q000", "Q001", "Q002", "Q003", "W291", "E501"]  # AppleScript has different quote/string requirements
 

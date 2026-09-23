@@ -179,7 +179,7 @@ Restart the Claude Desktop app to enable the integration.
 ### add_todo
 - `title` - Title of the todo
 - `notes` (optional) - Notes for the todo (supports Markdown formatting including checkboxes like `- [ ] Task`)
-- `when` (optional) - When to schedule the todo (today, tomorrow, evening, anytime, someday, or YYYY-MM-DD)
+- `when` (optional) - When to schedule the todo (today, tomorrow, evening, anytime, someday, or YYYY-MM-DD), optionally with a reminder time like `today@18:00`. See [Reminders and This Evening](#reminders-and-this-evening)
 - `deadline` (optional) - Deadline for the todo (YYYY-MM-DD)
 - `tags` (optional) - Tags to apply to the todo
 - `list_title` (optional) - Title of project/area to add to (must exactly match existing name)
@@ -190,7 +190,7 @@ Restart the Claude Desktop app to enable the integration.
 - `id` - ID of the todo to update
 - `title` (optional) - New title
 - `notes` (optional) - New notes
-- `when` (optional) - When to schedule the todo (today, tomorrow, evening, anytime, someday, or YYYY-MM-DD)
+- `when` (optional) - When to schedule the todo (today, tomorrow, evening, anytime, someday, or YYYY-MM-DD), optionally with a reminder time like `today@18:00`. See [Reminders and This Evening](#reminders-and-this-evening)
 - `deadline` (optional) - Deadline for the todo (YYYY-MM-DD)
 - `tags` (optional) - New tags
 - `completed` (optional) - Mark as completed
@@ -294,6 +294,39 @@ The random sampling tools (`get_random_inbox`, `get_random_anytime`, `get_random
 - Standardize formatting across your task descriptions
 - Find tasks that might be too vague or overly complex
 - Discover todos that could be automated or delegated
+
+## Reminders and This Evening
+
+AppleScript can only give Things a date, so it can't put a todo in This Evening or set a reminder time. For those, `add_todo` and `update_todo` create or update the todo with AppleScript first and then send the rest through the Things URL scheme. That needs your Things auth token, which is in Things → Settings → General → Enable Things URLs → Manage.
+
+Put it in the `env` block for the server in `claude_desktop_config.json`:
+
+```json
+{
+    "mcpServers": {
+        "things": {
+            "command": "~/.venvs/things3-mcp-env/bin/Things3-MCP-server",
+            "env": {
+                "THINGS_AUTH_TOKEN": "your-token-here"
+            }
+        }
+    }
+}
+```
+
+Some `when` values that use it:
+
+- `evening` puts the todo in This Evening
+- `today@18:00` or `today@6pm` for a reminder later today
+- `tomorrow@9am`
+- `2026-10-01@14:30` for a date and time
+- `evening@9:30pm` for This Evening with a reminder
+
+Times can be 24-hour (`18:00`) or 12-hour with am/pm (`6pm`, `6:30 PM`). `anytime` and `someday` can't take a time, and the tool returns an error without creating anything. Plain values like `today` or `2026-10-01` don't need the token at all.
+
+If the token is missing, the todo still gets created with its date, and the tool tells you the reminder part didn't go through.
+
+Repeating todos have to be set up in the Things app itself. Neither AppleScript nor the URL scheme can create them.
 
 ## Development
 

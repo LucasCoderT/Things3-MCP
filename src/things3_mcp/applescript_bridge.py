@@ -121,8 +121,9 @@ def escape_applescript_string(text: str) -> str:
     if not text:
         return '""'
 
-    # Replace any "+" with spaces (URL decoding)
-    text = text.replace("+", " ")
+    # Backslash is the escape character inside AppleScript string literals,
+    # so double it before building any quoted parts
+    text = text.replace("\\", "\\\\")
 
     # Handle carriage returns and tabs that can break AppleScript syntax
     # Preserve newlines as they're valid in AppleScript strings

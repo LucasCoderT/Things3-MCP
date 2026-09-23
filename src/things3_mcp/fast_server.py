@@ -21,6 +21,7 @@ from .logging_config import (
     log_operation_start,
     setup_logging,
 )
+from .url_scheme import WhenParseError, apply_url_when, parse_when
 
 # Configure enhanced logging
 setup_logging(console_level="INFO", file_level="DEBUG", structured_logs=True)
@@ -564,7 +565,13 @@ def add_task(
     ----
         title: Title of the todo
         notes: Notes for the todo
-        when: When to schedule the todo (today, tomorrow, evening, anytime, someday, or YYYY-MM-DD)
+        when: When to schedule the todo. One of:
+            - today, tomorrow, anytime, someday, or YYYY-MM-DD
+            - evening (This Evening)
+            - a date plus a reminder time: today@18:00, tomorrow@9am, 2026-10-01@14:30, evening@6pm.
+              Times can be 24-hour HH:MM or 12-hour with am/pm.
+            anytime and someday cannot take a time. evening and any @time value need the
+            THINGS_AUTH_TOKEN env var (Things → Settings → General → Enable Things URLs → Manage).
         deadline: Deadline for the todo (YYYY-MM-DD)
         tags: Tags to apply to the todo. IMPORTANT: Always pass as an array of
             strings (e.g., ["tag1", "tag2"]) NOT as a comma-separated string.
@@ -589,18 +596,17 @@ def add_task(
         tags = params["tags"]
         logger.debug(f"  processed tags: {tags!r} (type: {type(tags)})")
 
-        # Clean up title and notes to handle URL encoding
-        if isinstance(title, str):
-            title = title.replace("+", " ").replace("%20", " ")
-
-        if isinstance(notes, str):
-            notes = notes.replace("+", " ").replace("%20", " ")
+        # Validate when before creating anything, so a bad value never leaves a stray todo
+        try:
+            parsed_when = parse_when(when)
+        except WhenParseError as e:
+            return f"⚠️ Error: {e}"
 
         # Use the direct AppleScript approach which is more reliable
         logger.info(f"Creating todo using AppleScript: {title}")
 
         try:
-            task_id = add_todo(title=title, notes=notes, when=when, deadline=deadline, tags=tags, list_id=list_id, list_title=list_title)
+            task_id = add_todo(title=title, notes=notes, when=parsed_when.applescript_when, deadline=deadline, tags=tags, list_id=list_id, list_title=list_title)
         except Exception as bridge_error:
             logger.error(f"AppleScript bridge error: {bridge_error}")
             return f"⚠️ AppleScript bridge error: {bridge_error}"
@@ -613,6 +619,12 @@ def add_task(
         if isinstance(task_id, str) and ("script error" in task_id or task_id.startswith("/var/folders/") or task_id.startswith("Error:")):
             logger.error("AppleScript returned error instead of task ID: %s", task_id)
             return f"⚠️ AppleScript error: {task_id}"
+
+        # AppleScript can't set This Evening or reminder times; apply those via the URL scheme
+        if parsed_when.needs_url_scheme:
+            url_error = apply_url_when(task_id, parsed_when.url_when)
+            if url_error:
+                return f"⚠️ Created todo: {title} (ID: {task_id}), but could not set when={parsed_when.url_when!r}: {url_error}"
 
         # Get location information for the success message
         try:
@@ -673,13 +685,6 @@ def add_new_project(
         tags = params["tags"]
         todos = params["todos"]
 
-        # Clean up title and notes to handle URL encoding
-        if isinstance(title, str):
-            title = title.replace("+", " ").replace("%20", " ")
-
-        if isinstance(notes, str):
-            notes = notes.replace("+", " ").replace("%20", " ")
-
         # Use the direct AppleScript approach which is more reliable
         logger.info(f"Creating project using AppleScript: {title}")
 
@@ -738,7 +743,13 @@ def update_task(
         id: ID of the todo to update.
         title: New title.
         notes: New notes.
-        when: When to schedule the todo (today, tomorrow, anytime, someday, or YYYY-MM-DD).
+        when: When to schedule the todo. One of:
+            - today, tomorrow, anytime, someday, or YYYY-MM-DD
+            - evening (This Evening)
+            - a date plus a reminder time: today@18:00, tomorrow@9am, 2026-10-01@14:30, evening@6pm.
+              Times can be 24-hour HH:MM or 12-hour with am/pm.
+            anytime and someday cannot take a time. evening and any @time value need the
+            THINGS_AUTH_TOKEN env var (Things → Settings → General → Enable Things URLs → Manage).
         deadline: New deadline (YYYY-MM-DD).
         tags: New tags. IMPORTANT: Always pass as an array of strings (e.g., ["tag1", "tag2"]) NOT as a comma-separated string. Passing as a string will treat each character as a separate tag.
         completed: Mark as completed.
@@ -752,13 +763,11 @@ def update_task(
         params = preprocess_array_params(tags=tags)
         tags = params["tags"]
 
-        # Clean up string parameters to handle URL encoding
-        if isinstance(title, str):
-            title = title.replace("+", " ").replace("%20", " ")
-        if isinstance(notes, str):
-            notes = notes.replace("+", " ").replace("%20", " ")
-        if isinstance(list_name, str):
-            list_name = list_name.replace("+", " ").replace("%20", " ")
+        # Validate when before updating anything
+        try:
+            parsed_when = parse_when(when)
+        except WhenParseError as e:
+            return f"⚠️ Error: {e}"
 
         logger.info(f"Updating todo using AppleScript: {id}")
 
@@ -768,7 +777,7 @@ def update_task(
                 id=id,
                 title=title,
                 notes=notes,
-                when=when,
+                when=parsed_when.applescript_when,
                 deadline=deadline,
                 tags=tags,
                 completed=completed,
@@ -781,6 +790,12 @@ def update_task(
             # Handle various success cases
             if "true" in str(success).lower():
                 logger.debug("Success case matched: 'true' in result")
+
+                # AppleScript can't set This Evening or reminder times; apply those via the URL scheme
+                if parsed_when.needs_url_scheme:
+                    url_error = apply_url_when(id, parsed_when.url_when)
+                    if url_error:
+                        return f"⚠️ Updated todo with ID: {id}, but could not set when={parsed_when.url_when!r}: {url_error}"
 
                 return f"✅ Successfully updated todo with ID: {id}"
             elif success.startswith("Error:"):
@@ -847,15 +862,6 @@ def update_existing_project(
         # Preprocess only the tags parameter
         params = preprocess_array_params(tags=tags)
         tags = params["tags"]
-
-        # Clean up string parameters to handle URL encoding
-        if isinstance(title, str):
-            title = title.replace("+", " ").replace("%20", " ")
-        if isinstance(notes, str):
-            notes = notes.replace("+", " ").replace("%20", " ")
-        if isinstance(area_title, str):
-            area_title = area_title.replace("+", " ").replace("%20", " ")
-            logger.info(f"Cleaned area_title: {area_title!r}")
 
         # Use the direct AppleScript approach which is more reliable
         logger.info(f"Updating project using AppleScript: {id}")
