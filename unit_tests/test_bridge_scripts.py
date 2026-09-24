@@ -88,3 +88,23 @@ def test_update_project_clears_notes(scripts):
 def test_safety_check_catches_unescaped_payload():
     # Guard against the check itself being too lenient
     assert not string_literals_are_safe('set theTodo to to do id "x" & (do shell script "touch /tmp/pwned") & ""')
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "expected"),
+    [
+        ({"completed": True}, "set status of theProject to completed"),
+        ({"completed": False}, "set status of theProject to open"),
+        ({"canceled": True}, "set status of theProject to canceled"),
+        ({"canceled": False}, "set status of theProject to open"),
+    ],
+)
+def test_update_project_status(scripts, kwargs, expected):
+    update_project(id="P-1", **kwargs)
+    assert expected in scripts[0]
+    assert scripts[0].count("set status") == 1
+
+
+def test_update_project_leaves_status_alone_when_none(scripts):
+    update_project(id="P-1", title="t")
+    assert "set status" not in scripts[0]

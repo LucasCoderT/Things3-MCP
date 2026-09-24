@@ -771,10 +771,11 @@ def update_project(
             script_parts.append('    set tag names of theProject to ""')
     if deadline:
         update_applescript_with_due_date(script_parts, deadline, "theProject")
+    # False reopens rather than being ignored, matching update_todo
     if completed is not None:
-        script_parts.append("    set status of theProject to completed")
+        script_parts.append(f"    set status of theProject to {'completed' if completed else 'open'}")
     if canceled is not None:
-        script_parts.append("    set status of theProject to canceled")
+        script_parts.append(f"    set status of theProject to {'canceled' if canceled else 'open'}")
 
     script_parts.append("    return true")
     script_parts.append("on error errMsg")
