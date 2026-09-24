@@ -6,7 +6,7 @@ from unittest.mock import patch
 import pytest
 
 from things3_mcp import applescript_bridge
-from things3_mcp.applescript_bridge import add_project, add_todo, update_project, update_todo
+from things3_mcp.applescript_bridge import add_project, add_todo, ensure_tags, update_project, update_todo
 
 EVIL = 'x" & (do shell script "touch /tmp/pwned") & "'
 
@@ -108,3 +108,14 @@ def test_update_project_status(scripts, kwargs, expected):
 def test_update_project_leaves_status_alone_when_none(scripts):
     update_project(id="P-1", title="t")
     assert "set status" not in scripts[0]
+
+
+def test_ensure_tags_escapes_and_skips_existing(scripts):
+    assert ensure_tags(["Plain", EVIL]) == "true"
+    assert 'if not (exists tag ("Plain")) then make new tag with properties {name:"Plain"}' in scripts[0]
+    assert string_literals_are_safe(scripts[0])
+
+
+def test_ensure_tags_nothing_to_do(scripts):
+    assert ensure_tags([]) == "true"
+    assert scripts == []

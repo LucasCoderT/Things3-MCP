@@ -243,6 +243,36 @@ def describe_url_update(when: str | None = None, checklist: ChecklistUpdate | No
     return " and ".join(parts)
 
 
+MISSING_TOKEN_MESSAGE = f"{AUTH_TOKEN_ENV} is not set. Copy the token from Things → Settings → General → Enable Things URLs → Manage and add it to the MCP server's env."
+UNAPPLIED_HINT = f"This usually means {AUTH_TOKEN_ENV} is wrong or out of date; Things shows the error in its own window."
+
+
+def auth_token() -> str | None:
+    """Return the Things auth token from the environment, or None if it isn't set."""
+    return os.environ.get(AUTH_TOKEN_ENV, "").strip() or None
+
+
+def open_things_url(url: str) -> str | None:
+    """Open a Things URL with ``open -g`` so Things stays in the background.
+
+    Returns:
+    -------
+        None if the URL was handed to Things, otherwise an error message. Success
+        only means ``open`` worked; Things may still reject the URL.
+    """
+    try:
+        result = subprocess.run(["open", "-g", url], capture_output=True, text=True, timeout=10, check=False)  # nosec B603 B607
+    except (OSError, subprocess.TimeoutExpired) as e:
+        logger.error(f"Failed to open Things URL: {e}")
+        return f"Could not open Things URL: {e}"
+
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip() or f"exit code {result.returncode}"
+        logger.error(f"open -g failed: {detail}")
+        return f"Could not open Things URL: {detail}"
+    return None
+
+
 def build_update_url(
     todo_id: str,
     token: str,
@@ -346,7 +376,7 @@ def wait_for_url_update(
             return None
         if time.monotonic() >= deadline:
             logger.error(f"URL update for {todo_id} not applied after {timeout}s: {missing}")
-            return f"Things didn't apply {', '.join(missing)} within {timeout:g}s. This usually means {AUTH_TOKEN_ENV} is wrong or out of date; Things shows the error in its own window."
+            return f"Things didn't apply {', '.join(missing)} within {timeout:g}s. {UNAPPLIED_HINT}"
         time.sleep(interval)
 
 
@@ -361,9 +391,9 @@ def apply_url_update(todo_id: str, when: str | None = None, checklist: Checklist
     -------
         None on success, otherwise an error message describing what went wrong.
     """
-    token = os.environ.get(AUTH_TOKEN_ENV, "").strip()
+    token = auth_token()
     if not token:
-        return f"{AUTH_TOKEN_ENV} is not set. Copy the token from Things → Settings → General → Enable Things URLs → Manage and add it to the MCP server's env."
+        return MISSING_TOKEN_MESSAGE
 
     try:
         before = read_todo_state(todo_id)
@@ -374,15 +404,8 @@ def apply_url_update(todo_id: str, when: str | None = None, checklist: Checklist
     url = build_update_url(todo_id, token, when=when, checklist=checklist, heading=heading)
     logger.info(f"Applying {describe_url_update(when, checklist, heading)} to {todo_id} via Things URL scheme")
 
-    try:
-        result = subprocess.run(["open", "-g", url], capture_output=True, text=True, timeout=10, check=False)  # nosec B603 B607
-    except (OSError, subprocess.TimeoutExpired) as e:
-        logger.error(f"Failed to open Things URL: {e}")
-        return f"Could not open Things URL: {e}"
-
-    if result.returncode != 0:
-        detail = (result.stderr or result.stdout or "").strip() or f"exit code {result.returncode}"
-        logger.error(f"open -g failed: {detail}")
-        return f"Could not open Things URL: {detail}"
+    open_error = open_things_url(url)
+    if open_error:
+        return open_error
 
     return wait_for_url_update(todo_id, before, when=when, checklist=checklist, heading=heading)

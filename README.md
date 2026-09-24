@@ -146,7 +146,8 @@ Restart the Claude Desktop app to enable the integration.
 
 #### Modification Operations
 - `add_todo` - Create a new todo with full parameter support
-- `add_project` - Create a new project with tags and todos
+- `add_todos` - Create several todos in one call
+- `add_project` - Create a new project with tags, todos and headings
 - `update_todo` - Update an existing todo
 - `update_project` - Update an existing project
 - `show_item` - Show a specific item or list in Things
@@ -207,6 +208,11 @@ Restart the Claude Desktop app to enable the integration.
 - `checklist_mode` (optional) - `replace` (default), `append` or `prepend`, for how `checklist_items` combine with the existing checklist
 - `heading` (optional) - Title of an existing heading to move the todo under (case-insensitive), checked against the new project if the todo is being moved, otherwise its current one. `""` moves it out of its heading. Needs `THINGS_AUTH_TOKEN`
 
+### add_todos
+- `todos` - Array of up to 100 objects, each with the same fields as `add_todo` (`title` is required). Needs `THINGS_AUTH_TOKEN`. The reply lists each new todo with its ID
+
+Every todo is checked before any are created, so one bad todo means none get created and the error says which one. A `list_title` that doesn't match a project or area is an error here, where `add_todo` would put the todo in the Inbox.
+
 ### add_project
 - `title` - Title of the project
 - `notes` (optional) - Notes for the project
@@ -214,7 +220,8 @@ Restart the Claude Desktop app to enable the integration.
 - `deadline` (optional) - Deadline for the project
 - `tags` (optional) - Tags to apply to the project
 - `area_title` or `area_id` (optional) - Title or ID of area to add to (must exactly match an existing area title — look them up with `get_areas`)
-- `todos` (optional) - Initial todos to create in the project
+- `todos` (optional) - Initial todos to create in the project. With `headings`, these go above the first heading
+- `headings` (optional) - Headings to create, each with the todos under it, in order, e.g. `{"Face": ["Wash", "Moisturize"], "Body": ["Shower"], "Later": []}`. Needs `THINGS_AUTH_TOKEN`. See [Headings](#headings)
 
 ### update_project
 - `id` - ID of the project to update
@@ -349,9 +356,11 @@ Headings are the groups inside a project. `get_headings` lists them, and `add_to
 
 The heading is checked before anything is written. If it isn't in the project, or more than one heading matches, or the todo isn't going into a project at all, you get an error listing the project's headings and nothing is created or changed.
 
-Headings themselves have to be created in the Things app, with Cmd-Shift-N inside a project.
+New headings can only be made along with a new project.
 
-I tried adding one to an existing project through `things:///json` with an `update` operation, but Things ignored it.
+Passing `headings` to `add_project` creates the whole project in one `things:///json` call. For a project that already exists, add headings in the Things app with Cmd-Shift-N inside the project, because a JSON `update` on an existing project ignores them (I tried).
+
+That path is stricter: the area has to exist, and `when` can't take evening or a time. Missing tags get created first, like AppleScript does.
 
 ## Development
 

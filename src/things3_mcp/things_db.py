@@ -81,3 +81,42 @@ def read_schedule_extras(todo_id: str) -> tuple[str | None, bool]:
     if row is None:
         return None, False
     return decode_reminder(row[0]), row[1] == _EVENING_BUCKET
+
+
+# TMTask.type values
+_TYPE_CODES = {"to-do": 0, "project": 1, "heading": 2}
+
+
+def created_since(item_type: str, since: float, titles: list[str]) -> list[tuple[str, str]]:
+    """Return ``(uuid, title)`` for untrashed items of a type created at or after ``since`` with one of these titles.
+
+    Rows come back in creation order. Things creates a JSON import's items in
+    the order they were sent, which is how callers match them back up.
+    """
+    wanted = set(titles)
+    connection = _connect()
+    try:
+        rows = connection.execute(
+            "SELECT uuid, title FROM TMTask WHERE type = ? AND trashed = 0 AND creationDate >= ? ORDER BY creationDate, rowid",
+            (_TYPE_CODES[item_type], since),
+        ).fetchall()
+    finally:
+        connection.close()
+    return [(uuid, title) for uuid, title in rows if title in wanted]
+
+
+def project_contents(project_id: str) -> tuple[list[str], list[tuple[str, str | None]]]:
+    """Return a project's heading titles and its to-dos as ``(title, heading title)`` pairs."""
+    connection = _connect()
+    try:
+        headings = connection.execute('SELECT title FROM TMTask WHERE type = 2 AND trashed = 0 AND project = ? ORDER BY "index"', (project_id,)).fetchall()
+        todos = connection.execute(
+            """
+            SELECT t.title, h.title FROM TMTask t LEFT JOIN TMTask h ON h.uuid = t.heading
+            WHERE t.type = 0 AND t.trashed = 0 AND (t.project = ? OR h.project = ?)
+            """,
+            (project_id, project_id),
+        ).fetchall()
+    finally:
+        connection.close()
+    return [title for (title,) in headings], [(title, heading) for title, heading in todos]

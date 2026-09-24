@@ -284,6 +284,34 @@ def add_todo(  # noqa: PLR0913
         return False
 
 
+def ensure_tags(names: list[str]) -> str:
+    """Create any of these tags that don't exist yet.
+
+    The Things URL scheme silently drops tags that don't exist, while
+    AppleScript's `set tag names` creates them. JSON imports call this first
+    so both paths behave the same.
+
+    Returns:
+    -------
+        "true" if successful, error message if failed
+    """
+    if not names:
+        return "true"
+    if not ensure_things_ready():
+        return "Error: Things app is not ready"
+
+    script_parts = ['tell application "Things3"', "try"]
+    for name in names:
+        escaped = escape_applescript_string(name)
+        script_parts.append(f"    if not (exists tag ({escaped})) then make new tag with properties {{name:{escaped}}}")
+    script_parts.append("    return true")
+    script_parts.append("on error errMsg")
+    script_parts.append('    return "Error: " & errMsg')
+    script_parts.append("end try")
+    script_parts.append("end tell")
+    return run_applescript("\n".join(script_parts))
+
+
 def is_valid_date_format(date_string: str) -> bool:
     """Check if a string matches YYYY-MM-DD date format."""
     try:

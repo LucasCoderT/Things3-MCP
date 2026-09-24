@@ -16,6 +16,7 @@ from .applescript_bridge import (
 )
 from .formatters import format_area, format_project, format_tag, format_todo
 from .headings import HeadingError, list_headings, project_of, resolve_add_project, resolve_heading, resolve_update_project
+from .json_import import import_project, import_todos
 from .logging_config import (
     get_logger,
     log_operation_end,
@@ -32,18 +33,18 @@ logger = get_logger(__name__)
 def preprocess_array_params(**kwargs):
     """Preprocess parameters to handle MCP framework array serialization issues.
 
-    The MCP framework sometimes passes arrays as strings (e.g., '["tag1", "tag2"]')
+    The MCP framework sometimes passes arrays and objects as strings (e.g., '["tag1", "tag2"]')
     instead of actual arrays. This function detects and parses such cases.
     """
     result = {}
     for key, value in kwargs.items():
         if value is None:
             result[key] = None
-        elif isinstance(value, str) and value.startswith("[") and value.endswith("]"):
-            # Looks like a stringified array, try to parse it
+        elif isinstance(value, str) and ((value.startswith("[") and value.endswith("]")) or (value.startswith("{") and value.endswith("}"))):
+            # Looks like a stringified array or object, try to parse it
             try:
                 parsed = json.loads(value)
-                if isinstance(parsed, list):
+                if isinstance(parsed, list | dict):
                     result[key] = parsed
                     logger.debug(f"Parsed stringified array for {key}: {value} -> {parsed}")
                 else:
@@ -699,6 +700,29 @@ def add_task(
         return f"⚠️ Error creating todo: {e!s}"
 
 
+@mcp.tool(name="add_todos")
+def add_todos(todos: list[dict] | str) -> str:
+    """Create several todos in one call.
+
+    Faster than calling add_todo repeatedly. Everything is checked before anything is created,
+    so one bad todo means none are created. Needs the THINGS_AUTH_TOKEN env var.
+
+    Args:
+    ----
+        todos: Array of objects, at most 100. Each one takes the same fields as add_todo:
+            title (required), notes, when, deadline, tags, checklist_items, list_id, list_title, heading.
+            e.g. [{"title": "Buy milk", "when": "today@18:00"}, {"title": "Shower", "list_title": "Hygiene", "heading": "Body"}].
+            Unlike add_todo, a list_title that doesn't match a project or area is an error rather than landing in the Inbox.
+    """
+    try:
+        params = preprocess_array_params(todos=todos)
+        return import_todos(params["todos"])
+    except Exception as e:
+        logger.error(f"Error creating todos: {e!s}")
+        logger.error(f"Full traceback: {traceback.format_exc()}")
+        return f"⚠️ Error creating todos: {e!s}"
+
+
 @mcp.tool(name="add_project")
 def add_new_project(
     title: str,
@@ -709,6 +733,7 @@ def add_new_project(
     area_id: str | None = None,
     area_title: str | None = None,
     todos: list[str] | str | None = None,
+    headings: dict[str, list[str]] | str | None = None,
 ) -> str:
     """Create a new project in Things.
 
@@ -723,13 +748,23 @@ def add_new_project(
             Passing as a string will treat each character as a separate tag.
         area_id: ID of area to add to
         area_title: Title of area to add to (must exactly match an existing area title — look them up with get_areas)
-        todos: Initial todos to create in the project
+        todos: Initial todos to create in the project. With headings, these go above the first heading.
+        headings: Headings to create in the project, each with the todos under it, in order.
+            An object mapping heading title to an array of todo titles, e.g.
+            {"Face": ["Wash", "Moisturize"], "Body": ["Shower"], "Later": []}.
+            Headings can only be created along with a new project. With headings, the project is created
+            in one things:///json call, which needs the THINGS_AUTH_TOKEN env var; the area must exist,
+            and when can't take evening or a time.
     """
     try:
         # Preprocess parameters to handle MCP array serialization issues
-        params = preprocess_array_params(tags=tags, todos=todos)
+        params = preprocess_array_params(tags=tags, todos=todos, headings=headings)
         tags = params["tags"]
         todos = params["todos"]
+
+        # AppleScript can't create headings, so a project with headings is created in one JSON import
+        if params["headings"]:
+            return import_project(title=title, notes=notes, when=when, deadline=deadline, tags=tags, area_id=area_id, area_title=area_title, todos=todos, headings=params["headings"])
 
         try:
             reject_past_date(when)
