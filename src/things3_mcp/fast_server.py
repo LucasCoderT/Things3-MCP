@@ -22,7 +22,7 @@ from .logging_config import (
     log_operation_start,
     setup_logging,
 )
-from .url_scheme import ChecklistError, WhenParseError, apply_url_update, describe_url_update, parse_checklist, parse_when
+from .url_scheme import ChecklistError, WhenParseError, apply_url_update, describe_url_update, parse_checklist, parse_when, reject_past_date
 
 # Configure enhanced logging
 setup_logging(console_level="INFO", file_level="DEBUG", structured_logs=True)
@@ -731,6 +731,11 @@ def add_new_project(
         tags = params["tags"]
         todos = params["todos"]
 
+        try:
+            reject_past_date(when)
+        except WhenParseError as e:
+            return f"⚠️ Error: {e}"
+
         # Use the direct AppleScript approach which is more reliable
         logger.info(f"Creating project using AppleScript: {title}")
 
@@ -791,7 +796,7 @@ def update_task(
     ----
         id: ID of the todo to update.
         title: New title.
-        notes: New notes.
+        notes: New notes. Pass "" to clear the notes.
         when: When to schedule the todo. One of:
             - today, tomorrow, anytime, someday, or YYYY-MM-DD
             - evening (This Evening)
@@ -800,7 +805,8 @@ def update_task(
             anytime and someday cannot take a time. evening and any @time value need the
             THINGS_AUTH_TOKEN env var (Things → Settings → General → Enable Things URLs → Manage).
         deadline: New deadline (YYYY-MM-DD).
-        tags: New tags. IMPORTANT: Always pass as an array of strings (e.g., ["tag1", "tag2"]) NOT as a comma-separated string. Passing as a string will treat each character as a separate tag.
+        tags: New tags, replacing the existing ones. Pass [] to remove all tags.
+            IMPORTANT: Always pass as an array of strings (e.g., ["tag1", "tag2"]) NOT as a comma-separated string. Passing as a string will treat each character as a separate tag.
         completed: Mark as completed.
         canceled: Mark as canceled.
         list_id: ID of project/area to move the todo to (takes priority over list_name if both provided).
@@ -898,10 +904,11 @@ def update_existing_project(
     ----
         id: ID of the project to update
         title: New title
-        notes: New notes
+        notes: New notes. Pass "" to clear the notes.
         when: New schedule (today, tomorrow, anytime, someday, or YYYY-MM-DD)
         deadline: New deadline (YYYY-MM-DD)
-        tags: New tags. IMPORTANT: Always pass as an array of strings (e.g., ["tag1", "tag2"]) NOT as a comma-separated string. Passing as a string will treat each character as a separate tag.
+        tags: New tags, replacing the existing ones. Pass [] to remove all tags.
+            IMPORTANT: Always pass as an array of strings (e.g., ["tag1", "tag2"]) NOT as a comma-separated string. Passing as a string will treat each character as a separate tag.
         completed: Mark as completed
         canceled: Mark as canceled
         list_name: Move project directly to a built-in list. Must be one of:
@@ -924,6 +931,11 @@ def update_existing_project(
         # Preprocess only the tags parameter
         params = preprocess_array_params(tags=tags)
         tags = params["tags"]
+
+        try:
+            reject_past_date(when)
+        except WhenParseError as e:
+            return f"⚠️ Error: {e}"
 
         # Use the direct AppleScript approach which is more reliable
         logger.info(f"Updating project using AppleScript: {id}")

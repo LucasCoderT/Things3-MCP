@@ -233,14 +233,15 @@ def add_todo(  # noqa: PLR0913
 
     # Handle project/area assignment by ID
     if list_id:
+        escaped_list_id = escape_applescript_string(list_id)
         script_parts.append("try")
         script_parts.append("  -- Try to find as project by ID")
-        script_parts.append(f'  set target_project to first project whose id is "{list_id}"')
+        script_parts.append(f"  set target_project to first project whose id is {escaped_list_id}")
         script_parts.append("  set project of newTodo to target_project")
         script_parts.append("on error")
         script_parts.append("  try")
         script_parts.append("    -- Try to find as area by ID")
-        script_parts.append(f'    set target_area to first area whose id is "{list_id}"')
+        script_parts.append(f"    set target_area to first area whose id is {escaped_list_id}")
         script_parts.append("    set area of newTodo to target_area")
         script_parts.append("  on error")
         script_parts.append("    -- Neither project nor area found with ID, will create todo without assignment")
@@ -417,13 +418,14 @@ def update_todo(
     # Build the AppleScript command to find and update the todo
     script_parts = ['tell application "Things3"']
     script_parts.append("try")
-    script_parts.append(f'    set theTodo to to do id "{id}"')
+    script_parts.append(f"    set theTodo to to do id ({escape_applescript_string(id)})")
 
     # Update properties one at a time (simplified)
     if title:
         script_parts.append(f"    set name of theTodo to {escape_applescript_string(title)}")
 
-    if notes:
+    # None leaves notes alone; an empty string clears them
+    if notes is not None:
         script_parts.append(f"    set notes of theTodo to {escape_applescript_string(notes)}")
 
     # Handle scheduling using the standardized helper
@@ -442,13 +444,16 @@ def update_todo(
             tag_string = ", ".join(tags)
             escaped_tag_string = escape_applescript_string(tag_string)
             script_parts.append(f"    set tag names of theTodo to {escaped_tag_string}")
+        else:
+            # An empty list clears the tags
+            script_parts.append('    set tag names of theTodo to ""')
 
     # Handle list assignment (built-in lists, projects, or areas)
     if list_name:
         escaped_list = escape_applescript_string(list_name)
         script_parts.append("    try")
         # First try to find as built-in list
-        script_parts.append(f"        set targetList to list {escaped_list}")
+        script_parts.append(f"        set targetList to list ({escaped_list})")
         script_parts.append("        move theTodo to targetList")
         script_parts.append("    on error")
         script_parts.append("        try")
@@ -461,24 +466,25 @@ def update_todo(
         script_parts.append(f"                set targetArea to first area whose name is {escaped_list}")
         script_parts.append("                set area of theTodo to targetArea")
         script_parts.append("            on error")
-        script_parts.append(f'                return "Error: List/Project/Area not found - {list_name}"')
+        script_parts.append(f'                return "Error: List/Project/Area not found - " & {escaped_list}')
         script_parts.append("            end try")
         script_parts.append("        end try")
         script_parts.append("    end try")
 
     # Handle list assignment by ID (projects or areas only)
     if list_id:
+        escaped_list_id = escape_applescript_string(list_id)
         script_parts.append("    try")
         # Try to find as project by ID
-        script_parts.append(f'        set targetProject to first project whose id is "{list_id}"')
+        script_parts.append(f"        set targetProject to first project whose id is {escaped_list_id}")
         script_parts.append("        set project of theTodo to targetProject")
         script_parts.append("    on error")
         script_parts.append("        try")
         # Try to find as area by ID
-        script_parts.append(f'            set targetArea to first area whose id is "{list_id}"')
+        script_parts.append(f"            set targetArea to first area whose id is {escaped_list_id}")
         script_parts.append("            set area of theTodo to targetArea")
         script_parts.append("        on error")
-        script_parts.append(f'            return "Error: Project/Area not found with ID - {list_id}"')
+        script_parts.append(f'            return "Error: Project/Area not found with ID - " & {escaped_list_id}')
         script_parts.append("        end try")
         script_parts.append("    end try")
 
@@ -557,7 +563,7 @@ def add_project(
     if area_id or area_title:
         if area_id:
             # Try to find area by ID first
-            script_parts.append(f'set area_id to "{area_id}"')
+            script_parts.append(f"set area_id to {escape_applescript_string(area_id)}")
             script_parts.append("try")
             script_parts.append("  set target_area to first area whose id is area_id")
             script_parts.append("  set area_ref to target_area")
@@ -669,7 +675,7 @@ def move_project_to_list(script_parts: list[str], list_name: str, project_ref: s
         return False
 
     # Move using the 'move' command instead of setting container
-    script_parts.append(f'    move {project_ref} to list "{list_name}"')
+    script_parts.append(f"    move {project_ref} to list ({escape_applescript_string(list_name)})")
     return True
 
 
@@ -716,7 +722,7 @@ def update_project(
 
     script_parts = ['tell application "Things3"']
     script_parts.append("try")
-    script_parts.append(f'    set theProject to project id "{id}"')
+    script_parts.append(f"    set theProject to project id ({escape_applescript_string(id)})")
 
     # Handle list moves first
     if list_name:
@@ -735,10 +741,11 @@ def update_project(
     if area_id:
         # Use area_id if provided (takes precedence over area_title)
         script_parts.append("    try")
-        script_parts.append(f'        set targetArea to first area whose id is "{area_id}"')
+        escaped_area_id = escape_applescript_string(area_id)
+        script_parts.append(f"        set targetArea to first area whose id is {escaped_area_id}")
         script_parts.append("        set area of theProject to targetArea")
         script_parts.append("    on error")
-        script_parts.append(f'        return "Error: Area not found with ID - {area_id}"')
+        script_parts.append(f'        return "Error: Area not found with ID - " & {escaped_area_id}')
         script_parts.append("    end try")
     elif area_title:
         escaped_area = escape_applescript_string(area_title)
@@ -746,13 +753,14 @@ def update_project(
         script_parts.append(f"        set targetArea to first area whose name is {escaped_area}")
         script_parts.append("        set area of theProject to targetArea")
         script_parts.append("    on error")
-        script_parts.append(f'        return "Error: Area not found - {area_title}"')
+        script_parts.append(f'        return "Error: Area not found - " & {escaped_area}')
         script_parts.append("    end try")
 
     # Handle other property updates
     if title:
         script_parts.append(f"    set name of theProject to {escape_applescript_string(title)}")
-    if notes:
+    # None leaves notes alone; an empty string clears them
+    if notes is not None:
         script_parts.append(f"    set notes of theProject to {escape_applescript_string(notes)}")
     if tags is not None:
         if tags:

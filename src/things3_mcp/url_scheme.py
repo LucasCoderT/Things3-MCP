@@ -18,11 +18,13 @@ ID in a single ``things:///update`` call.
 import os
 import re
 import subprocess  # nosec B404 - Required for opening Things URLs
+import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from urllib.parse import quote, urlencode
 
 from .logging_config import get_logger
+from .things_db import TodoState, read_todo_state
 
 logger = get_logger(__name__)
 
@@ -95,6 +97,22 @@ def _is_date(value: str) -> bool:
     return True
 
 
+def reject_past_date(when: str | None) -> None:
+    """Raise if ``when`` starts with a YYYY-MM-DD date before today.
+
+    AppleScript would otherwise quietly schedule a past date for today.
+
+    Raises:
+    ------
+        WhenParseError: If the date is in the past.
+    """
+    if not when:
+        return
+    day = when.strip().partition("@")[0].strip()
+    if _is_date(day) and datetime.strptime(day, "%Y-%m-%d").date() < date.today():
+        raise WhenParseError(f"Date {day} is in the past. Use today or a later date.")
+
+
 def parse_when(when: str | None) -> ParsedWhen:
     """Split a ``when`` value into its AppleScript and URL scheme parts.
 
@@ -115,6 +133,7 @@ def parse_when(when: str | None) -> ParsedWhen:
     if not text:
         return ParsedWhen(None, None)
 
+    reject_past_date(text)
     date_part, sep, time_part = text.partition("@")
     date_part = date_part.strip()
     keyword = date_part.lower()
@@ -255,11 +274,88 @@ def build_update_url(
     return f"things:///update?{query}"
 
 
+def find_unapplied(
+    before: TodoState | None,
+    after: TodoState,
+    when: str | None = None,
+    checklist: ChecklistUpdate | None = None,
+    heading: HeadingChange | None = None,
+) -> list[str]:
+    """Compare a to-do's state with what a URL update asked for, and list what's missing.
+
+    ``before`` is the state read before the URL was opened. It's needed to tell
+    whether appended or prepended items were actually added, since the same
+    text may already be in the checklist.
+    """
+    missing = []
+    if when:
+        day, _, reminder = when.partition("@")
+        if day == "evening" and not after.evening:
+            missing.append("This Evening")
+        if reminder and after.reminder != reminder:
+            missing.append(f"reminder at {reminder}")
+    if checklist:
+        want = [item.strip() for item in checklist.items]
+        have = [item.strip() for item in after.checklist]
+        added = len(have) - len(before.checklist) if before else len(want)
+        if checklist.mode == "replace":
+            landed = have == want
+        elif checklist.mode == "append":
+            landed = have[-len(want) :] == want and added == len(want)
+        else:
+            landed = have[: len(want)] == want and added == len(want)
+        if not landed:
+            missing.append("checklist items")
+    if heading and after.heading != heading.uuid:
+        missing.append(f"heading {heading.title!r}" if heading.uuid else "moving out of its heading")
+    return missing
+
+
+def wait_for_url_update(
+    todo_id: str,
+    before: TodoState | None,
+    when: str | None = None,
+    checklist: ChecklistUpdate | None = None,
+    heading: HeadingChange | None = None,
+    timeout: float = 5.0,
+    interval: float = 0.25,
+) -> str | None:
+    """Wait for Things to apply a URL update, and report what didn't land.
+
+    Things applies the URL on its own time, and ``open`` succeeds whether or
+    not Things accepts it. A wrong auth token only shows as an error inside
+    Things, so reading the to-do back is the only way to notice.
+
+    Returns:
+    -------
+        None once everything has landed (or if the database can't be read to check),
+        otherwise a message naming what never showed up.
+    """
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            after = read_todo_state(todo_id)
+        except Exception as e:
+            logger.warning(f"Could not read {todo_id} back to check the URL update: {e}")
+            return None
+        if after is None:
+            return f"Todo {todo_id} could not be found after the URL update."
+
+        missing = find_unapplied(before, after, when, checklist, heading)
+        if not missing:
+            return None
+        if time.monotonic() >= deadline:
+            logger.error(f"URL update for {todo_id} not applied after {timeout}s: {missing}")
+            return f"Things didn't apply {', '.join(missing)} within {timeout:g}s. This usually means {AUTH_TOKEN_ENV} is wrong or out of date; Things shows the error in its own window."
+        time.sleep(interval)
+
+
 def apply_url_update(todo_id: str, when: str | None = None, checklist: ChecklistUpdate | None = None, heading: HeadingChange | None = None) -> str | None:
     """Apply URL-scheme-only changes (``when``, checklist items, heading) to an existing todo.
 
     Everything goes in a single URL, opened with ``open -g`` so Things stays
-    in the background.
+    in the background. Afterwards the to-do is read back to check the change
+    actually landed.
 
     Returns:
     -------
@@ -268,6 +364,12 @@ def apply_url_update(todo_id: str, when: str | None = None, checklist: Checklist
     token = os.environ.get(AUTH_TOKEN_ENV, "").strip()
     if not token:
         return f"{AUTH_TOKEN_ENV} is not set. Copy the token from Things → Settings → General → Enable Things URLs → Manage and add it to the MCP server's env."
+
+    try:
+        before = read_todo_state(todo_id)
+    except Exception as e:
+        logger.warning(f"Could not read {todo_id} before the URL update: {e}")
+        before = None
 
     url = build_update_url(todo_id, token, when=when, checklist=checklist, heading=heading)
     logger.info(f"Applying {describe_url_update(when, checklist, heading)} to {todo_id} via Things URL scheme")
@@ -283,4 +385,4 @@ def apply_url_update(todo_id: str, when: str | None = None, checklist: Checklist
         logger.error(f"open -g failed: {detail}")
         return f"Could not open Things URL: {detail}"
 
-    return None
+    return wait_for_url_update(todo_id, before, when=when, checklist=checklist, heading=heading)

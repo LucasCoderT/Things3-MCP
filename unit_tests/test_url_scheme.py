@@ -1,6 +1,7 @@
 """Tests for the Things URL scheme helpers."""
 
 import subprocess
+from datetime import date
 from unittest.mock import patch
 
 import pytest
@@ -17,6 +18,7 @@ from things3_mcp.url_scheme import (
     normalize_time,
     parse_checklist,
     parse_when,
+    reject_past_date,
 )
 
 
@@ -207,3 +209,20 @@ def test_build_update_url_clears_heading_with_empty_heading():
 def test_describe_url_update_heading():
     assert describe_url_update(heading=HeadingChange("Body", "H")) == "move it under heading 'Body'"
     assert describe_url_update(heading=HeadingChange(None, None)) == "move it out of its heading"
+
+
+@pytest.mark.parametrize("when", ["2020-01-01", "2020-01-01@9am", " 2020-01-01 "])
+def test_parse_when_rejects_past_dates(when):
+    with pytest.raises(WhenParseError, match="is in the past"):
+        parse_when(when)
+
+
+def test_parse_when_accepts_today_as_a_date():
+    today = date.today().isoformat()
+    assert parse_when(today) == ParsedWhen(today, None)
+    assert parse_when(f"{today}@23:59") == ParsedWhen(today, f"{today}@23:59")
+
+
+@pytest.mark.parametrize("when", [None, "", "today", "someday", "2999-01-01", "evening@6pm"])
+def test_reject_past_date_allows(when):
+    reject_past_date(when)

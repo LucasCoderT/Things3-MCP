@@ -8,6 +8,8 @@ import logging
 
 import things
 
+from .things_db import read_schedule_extras
+
 logger = logging.getLogger(__name__)
 
 
@@ -33,6 +35,13 @@ def format_todo(todo: dict) -> str:
     # Add dates
     if todo.get("start_date"):
         todo_text += f"\nStart Date: {todo['start_date']}"
+        # things.py doesn't expose these, so they're read from the database.
+        # Both only mean something for a to-do with a start date.
+        reminder, evening = read_schedule_extras(todo["uuid"])
+        if evening:
+            todo_text += "\nEvening: yes"
+        if reminder:
+            todo_text += f"\nReminder: {reminder}"
     if todo.get("deadline"):
         todo_text += f"\nDeadline: {todo['deadline']}"
     if todo.get("stop_date"):  # Completion date

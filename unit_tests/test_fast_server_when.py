@@ -229,3 +229,28 @@ def test_update_bad_heading_never_updates(mocks):
         result = fast_server.update_task(id="TODO1", title="Changed", heading="Body")
     assert result.startswith("⚠️ Error:")
     mocks["update_todo"].assert_not_called()
+
+
+def test_add_past_date_never_creates(mocks):
+    result = fast_server.add_task(title="Late", when="2020-01-01")
+    assert result == "⚠️ Error: Date 2020-01-01 is in the past. Use today or a later date."
+    mocks["add_todo"].assert_not_called()
+
+
+@pytest.mark.parametrize("tool", ["add", "update"])
+def test_project_tools_reject_past_dates(tool):
+    with patch.object(fast_server, "add_project") as add_project, patch.object(fast_server, "update_project") as update_project:
+        if tool == "add":
+            result = fast_server.add_new_project(title="P", when="2020-01-01")
+        else:
+            result = fast_server.update_existing_project(id="P-1", when="2020-01-01@9am")
+    assert result.startswith("⚠️ Error: Date 2020-01-01 is in the past")
+    add_project.assert_not_called()
+    update_project.assert_not_called()
+
+
+def test_update_passes_empty_notes_and_tags_through(mocks):
+    fast_server.update_task(id="TODO1", notes="", tags=[])
+    kwargs = mocks["update_todo"].call_args.kwargs
+    assert kwargs["notes"] == ""
+    assert kwargs["tags"] == []

@@ -195,10 +195,10 @@ Restart the Claude Desktop app to enable the integration.
 ### update_todo
 - `id` - ID of the todo to update
 - `title` (optional) - New title
-- `notes` (optional) - New notes
+- `notes` (optional) - New notes. `""` clears them
 - `when` (optional) - When to schedule the todo (today, tomorrow, evening, anytime, someday, or YYYY-MM-DD), optionally with a reminder time like `today@18:00`. See [Reminders and This Evening](#reminders-and-this-evening)
 - `deadline` (optional) - Deadline for the todo (YYYY-MM-DD)
-- `tags` (optional) - New tags
+- `tags` (optional) - New tags, replacing the existing ones. `[]` removes them all
 - `completed` (optional) - Mark as completed
 - `canceled` (optional) - Mark as canceled
 - `list_name` (optional) - Name of built-in list, project, or area to move the todo to. For built-in lists use: "Inbox", "Today", "Anytime", "Someday". For projects/areas, use the exact name.
@@ -219,10 +219,10 @@ Restart the Claude Desktop app to enable the integration.
 ### update_project
 - `id` - ID of the project to update
 - `title` (optional) - New title
-- `notes` (optional) - New notes
+- `notes` (optional) - New notes. `""` clears them
 - `when` (optional) - When to schedule the project (today, tomorrow, evening, anytime, someday, or YYYY-MM-DD)
 - `deadline` (optional) - Deadline for the project (YYYY-MM-DD)
-- `tags` (optional) - New tags
+- `tags` (optional) - New tags, replacing the existing ones. `[]` removes them all
 - `completed` (optional) - Mark as completed
 - `canceled` (optional) - Mark as canceled
 
@@ -336,6 +336,10 @@ Some `when` values that use it:
 Times can be 24-hour (`18:00`) or 12-hour with am/pm (`6pm`, `6:30 PM`). `anytime` and `someday` can't take a time, and the tool returns an error without creating anything. Plain values like `today` or `2026-10-01` don't need the token at all.
 
 If the token is missing, the todo still gets created with its date, and the tool tells you the reminder part didn't go through.
+
+A wrong token is harder to spot, because Things only shows that error in its own window. So after sending the URL, the tool reads the todo back for up to 5 seconds and warns you if the change never showed up.
+
+Reads show the result too. Todos with a reminder get a `Reminder: 18:00` line, and todos in This Evening get `Evening: yes`. Neither is in things.py, so these two come straight from the Things database, opened read-only.
 
 Repeating todos have to be set up in the Things app itself. Neither AppleScript nor the URL scheme can create them.
 

@@ -144,3 +144,25 @@ def test_get_todos_groups_by_heading_in_display_order():
         out = fast_server.get_todos("P-HYG")
     titles = [line.removeprefix("Title: ") for line in out.splitlines() if line.startswith("Title: ")]
     assert titles == ["Root one", "Root two", "Wash face", "Scrub", "Brush"]
+
+
+def test_format_todo_shows_evening_and_reminder():
+    todo = {**TODO_IN_PROJECT, "start_date": "2026-09-24"}
+    with patch("things3_mcp.formatters.read_schedule_extras", return_value=("21:00", True)):
+        text = format_todo(todo)
+    assert "\nStart Date: 2026-09-24\nEvening: yes\nReminder: 21:00" in text
+
+
+def test_format_todo_reminder_only():
+    todo = {**TODO_IN_PROJECT, "start_date": "2026-09-24"}
+    with patch("things3_mcp.formatters.read_schedule_extras", return_value=("09:00", False)):
+        text = format_todo(todo)
+    assert "Reminder: 09:00" in text
+    assert "Evening" not in text
+
+
+def test_format_todo_skips_extras_without_start_date():
+    with patch("things3_mcp.formatters.read_schedule_extras") as extras:
+        text = format_todo(TODO_IN_PROJECT)
+    extras.assert_not_called()
+    assert "Reminder" not in text
